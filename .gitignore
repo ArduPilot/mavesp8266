@@ -1,4 +1,5 @@
 .pioenvs
+.vagrant
 platformio.sublime*
 platformio.pro*
 tests
