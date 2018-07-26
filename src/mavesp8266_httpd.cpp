@@ -289,6 +289,10 @@ static void handle_setup()
     message += getWorld()->getParameters()->getWifiStaPassword();
     message += "'><br>";
 
+    message += "WiFi MAC: ";
+    message += WiFi.macAddress();
+    message += "<br>\n";
+
     IPAddress IP;    
     message += "Station IP:&nbsp;";
     message += "<input type='text' name='ipsta' value='";
