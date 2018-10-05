@@ -42,16 +42,25 @@
 #include "mavesp8266_vehicle.h"
 
 #include <ESP8266WebServer.h>
+#include <FS.h> // spiffs support
+
+#include <ESP8266mDNS.h>
+#include <ESP8266HTTPUpdateServer.h>
+
+#include <SoftwareSerial.h>
+extern SoftwareSerial swSer;
 
 const char PROGMEM kTEXTPLAIN[]  = "text/plain";
 const char PROGMEM kTEXTHTML[]   = "text/html";
 const char PROGMEM kACCESSCTL[]  = "Access-Control-Allow-Origin";
-const char PROGMEM kUPLOADFORM[] = "<h1><a href='/'>MAVLink WiFi Bridge</a></h1><form method='POST' action='/upload' enctype='multipart/form-data'><input type='file' name='update'><br><input type='submit' value='Update'></form>";
-const char PROGMEM kHEADER[]     = "<!doctype html><html><head><title>MavLink Bridge</title></head><body><h1><a href='/'>MAVLink WiFi Bridge</a></h1>";
+
+const char PROGMEM kUPLOADFORM[] = "";
+const char PROGMEM kHEADER[]     = "<!doctype html><html><head><title>RFDesign TXMOD</title></head><body><h1><a href='/'>RFDesign TXMOD</a></h1>";
 const char PROGMEM kBADARG[]     = "BAD ARGS";
 const char PROGMEM kAPPJSON[]    = "application/json";
 
 const char* kBAUD       = "baud";
+const char* kPLAIN       = "plain";
 const char* kPWD        = "pwd";
 const char* kSSID       = "ssid";
 const char* kPWDSTA     = "pwdsta";
@@ -91,6 +100,13 @@ ESP8266WebServer    webServer(80);
 MavESP8266Update*   updateCB    = NULL;
 bool                started     = false;
 
+
+ESP8266HTTPUpdateServer httpUpdater;
+
+
+//holds the current upload, if there is one, except OTA binary uploads, done elsewhere.
+File fsUploadFile;
+
 //---------------------------------------------------------------------------------
 void setNoCacheHeaders() {
     webServer.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -123,10 +139,14 @@ void handle_upload() {
     if(updateCB) {
         updateCB->updateCompleted();
     }
-    ESP.restart();
+    //ESP.restart(); lets not do this just here, lets tell the user before we drop out on them... ( we'll let an ajax call to /reboot do it )
 }
 
 //---------------------------------------------------------------------------------
+
+// push some notification/s during the firmware update through the soft-serial port...
+#define DEBUG_SERIAL swSer
+
 void handle_upload_status() {
     bool success  = true;
     if(!started) {
@@ -138,7 +158,7 @@ void handle_upload_status() {
     HTTPUpload& upload = webServer.upload();
     if(upload.status == UPLOAD_FILE_START) {
         #ifdef DEBUG_SERIAL
-            DEBUG_SERIAL.setDebugOutput(true);
+            //DEBUG_SERIAL.setDebugOutput(true);
         #endif
         WiFiUDP::stopAll();
         Serial.end();
@@ -164,15 +184,21 @@ void handle_upload_status() {
             #ifdef DEBUG_SERIAL
                 DEBUG_SERIAL.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
             #endif
+              webServer.sendHeader("Location","/success.htm");      // Redirect the client to the success page
+              webServer.send(303);
+              //delay(2000); // so client can request /success just before we reboot.
         } else {
             #ifdef DEBUG_SERIAL
                 Update.printError(DEBUG_SERIAL);
             #endif
             success = false;
+            webServer.send(500, "text/plain", "500: couldn't create file");
         }
         #ifdef DEBUG_SERIAL
-            DEBUG_SERIAL.setDebugOutput(false);
+            //DEBUG_SERIAL.setDebugOutput(false);
         #endif
+
+
     }
     yield();
     if(!success) {
@@ -186,7 +212,7 @@ void handle_upload_status() {
 void handle_getParameters()
 {
     String message = FPSTR(kHEADER);
-    message += "<p>Parameters</p><table><tr><td width=\"240\">Name</td><td>Value</td></tr>";
+    message += "<p>TXMOD Parameters</p><table><tr><td width=\"240\">Name</td><td>Value</td></tr>";
     for(int i = 0; i < MavESP8266Parameters::ID_COUNT; i++) {
         message += "<tr><td>";
         message += getWorld()->getParameters()->getAt(i)->id;
@@ -219,17 +245,33 @@ static void handle_root()
     message += "Git Version: ";
     message += GIT_VERSION_STRING;
     message += "<br>\n";
-    message += "Build Date: ";
+   /* message += "Build Date: ";
     message += BUILD_DATE_STRING;
     message += " ";
-    message += BUILD_TIME_STRING;
+    message += BUILD_TIME_STRING; */
     message += "<p>\n";
+
+
+    // if we have an index.html in spiffs, use that, otherwise use a basic version that's included below.
+    File f = SPIFFS.open("/index.htm", "r");
+    if ( f ) { 
+        //while ( f.available() ) { 
+            message += f.readString();
+        //}
+    } else { 
+    
     message += "<ul>\n";
-    message += "<li><a href='/getstatus'>Get Status</a>\n";
-    message += "<li><a href='/setup'>Setup</a>\n";
-    message += "<li><a href='/getparameters'>Get Parameters</a>\n";
-    message += "<li><a href='/update'>Update Firmware</a>\n";
+    message += "<li><a href='/getstatus'>Get Status ( UDP/Mavlink mode )</a>\n";
+    message += "<li><a href='/getstatus_tcp'>Get Status (TCP/passthrough mode )</a>\n";
+    message += "<li><a href='/setup'>WiFi/Network Setup</a>\n";
+    message += "<li><a href='/getparameters'>Get TXMOD Parameters</a>\n";
+    message += "<li><a href='/r990x_params.txt'>Get 900x Radio Parameters</a>\n";
+    message += "<li><a href='/plist'>Edit 900x Radio Parameters</a>\n";
+
+  //  message += "<li><a href='/save900xparams'>Activate 900x params after editing.(be sure radio is *not* connected to a vehicle or remove device when you press this)</a>\n";
+    message += "<li><a href='/updatepage'>Update Firmware</a>\n";
     message += "<li><a href='/reboot'>Reboot</a>\n";
+    message += "<li><a href='/edit'>Advanced Mode -  Review and Edit (some) files in the SPIFFS filesystem.</a>";
     message += "</ul>\n";
     message += "<hr>\n";
     message += "<h2>Documentation</h2>\n";
@@ -237,10 +279,36 @@ static void handle_root()
     message += "<ul>\n";
     message += "<li><a href='http://ardupilot.org'>ArduPilot Website</a>\n";
     message += "<li><a href='http://ardupilot.org/copter/docs/common-esp8266-telemetry.html'>ESP8266 WiFi Documentation</a>\n";
-    message += "<li><a href='https://github.com/ArduPilot/mavesp8266'>ESP8266 Source Code</a>\n";
-    message += "<li><a href='http://firmware.ardupilot.org/Tools/MAVESP8266/'>ESP8266 Firmware Updates</a>\n";
+    message += "<li><a href='https://github.com/RFDesign/mavesp8266'>RFDesign ESP8266 Source Code</a>\n";
+    message += "<li><a href='http://files.rfdesign.com.au/firmware/'>RFDesign TXMOD Firmware Updates</a>\n";
+
     message += "</ul>\n";
-    message += "</body>";
+    message += "</body></html>";
+
+    }
+    setNoCacheHeaders();
+    webServer.send(200, FPSTR(kTEXTHTML), message);
+}
+
+//---------------------------------------------------------------------------------
+static void handle_update_html()
+{
+    String message = "";
+    // if we have an index.html in spiffs, use that, otherwise use a basic version that's included below.
+    File f = SPIFFS.open("/update.htm", "r");
+    if ( f ) { 
+            message += f.readString();
+    } else {  // in the event that update.htm is missing, give enough so we can upload a spiffs.bin and make one:
+
+        message +=  FPSTR(kHEADER);
+        message += "Please upload a spiffs.bin to continue: \n";
+        message += "<form method='POST' action='/update' enctype='multipart/form-data'>\n";
+        message += "Spiffs:<br>\n";
+        message += "<input type='file' name='spiffs'>\n";
+        message += "<input type='submit' value='Update SPIFFS'>\n";
+        message += "</form>\n";
+
+    }
     setNoCacheHeaders();
     webServer.send(200, FPSTR(kTEXTHTML), message);
 }
@@ -249,7 +317,7 @@ static void handle_root()
 static void handle_setup()
 {
     String message = FPSTR(kHEADER);
-    message += "<h1>Setup</h1>\n";
+    message += "<h1>Wifi Setup</h1>\n";
     message += "<form action='/setparameters' method='post'>\n";
 
     message += "WiFi Mode:&nbsp;";
@@ -373,6 +441,64 @@ static void handle_getStatus()
     message += "<tr><td>Parameters CRC</td><td>";
     message += paramCRC;
     message += "</td></tr>\n";
+    message += "</table>";
+    message += "</body>";
+    setNoCacheHeaders();
+    webServer.send(200, FPSTR(kTEXTHTML), message);
+}
+
+//---------------------------------------------------------------------------------
+static void handle_getStatusTcp()
+{
+    if(!flash)
+        flash = ESP.getFreeSketchSpace();
+
+    String message = FPSTR(kHEADER);
+
+// kinda hacky to use extern global vars here, but it'll do for now.
+extern long int stats_serial_in;
+extern long int stats_tcp_in;
+extern long int stats_serial_pkts;
+extern long int stats_tcp_pkts;
+//extern long int largest_serial_packet;
+//extern long int largest_tcp_packet;
+extern bool tcp_passthrumode;
+
+    message += "<p>TCP Comms Status - last 1 second of TCP throughput.</p><br>";
+
+    if ( tcp_passthrumode == true ) { 
+    message += "<font color=green>Currently In TCP pass-through mode right now.</font><br>\n";
+    } else { 
+    message += "<font color=red>NOT In TCP pass-through mode right now</font><br>\n";
+    }
+
+    message += "<table><tr><td width=\"240\">TCP Bytes Received from GCS</td><td>";
+    message += stats_tcp_in;
+    message += "</td></tr>";
+
+    message += "<tr><td>TCP Packets Sent to GCS</td><td>";
+    message += stats_tcp_pkts;
+    message += "</td></tr>";
+
+    message += "<tr><td>Serial Bytes Received from Vehicle</td><td>";
+    message += stats_serial_in;
+    message += "</td></tr>";
+
+    message += "<tr><td>Serial Packets Sent to Vehicle</td><td>";
+    message += stats_serial_pkts;
+    message += "</td></tr></table>";
+
+    message += "<p>System Status</p><table>\n";
+    message += "<tr><td width=\"240\">Flash Size</td><td>";
+    message += ESP.getFlashChipRealSize();
+    message += "</td></tr>\n";
+    message += "<tr><td width=\"240\">Flash Available</td><td>";
+    message += flash;
+    message += "</td></tr>\n";
+    message += "<tr><td>RAM Left</td><td>";
+    message += String(ESP.getFreeHeap());
+    message += "</td></tr>\n";
+
     message += "</table>";
     message += "</body>";
     setNoCacheHeaders();
@@ -554,7 +680,7 @@ static void handle_reboot()
 
 //---------------------------------------------------------------------------------
 //-- 404
-void handle_notFound(){
+/* static void handle_notFound(){
     String message = "File Not Found\n\n";
     message += "URI: ";
     message += webServer.uri();
@@ -567,6 +693,331 @@ void handle_notFound(){
         message += " " + webServer.argName(i) + ": " + webServer.arg(i) + "\n";
     }
     webServer.send(404, FPSTR(kTEXTPLAIN), message);
+} */
+
+#define DBG_OUTPUT_PORT swSer
+
+String getContentType(String filename) {
+  if (webServer.hasArg("download")) {
+    return "application/octet-stream";
+  } else if (filename.endsWith(".htm")) {
+    return "text/html";
+  } else if (filename.endsWith(".html")) {
+    return "text/html";
+  } else if (filename.endsWith(".css")) {
+    return "text/css";
+  } else if (filename.endsWith(".js")) {
+    return "application/javascript";
+  } else if (filename.endsWith(".png")) {
+    return "image/png";
+  } else if (filename.endsWith(".gif")) {
+    return "image/gif";
+  } else if (filename.endsWith(".jpg")) {
+    return "image/jpeg";
+  } else if (filename.endsWith(".ico")) {
+    return "image/x-icon";
+  } else if (filename.endsWith(".xml")) {
+    return "text/xml";
+  } else if (filename.endsWith(".pdf")) {
+    return "application/x-pdf";
+  } else if (filename.endsWith(".zip")) {
+    return "application/x-zip";
+  } else if (filename.endsWith(".gz")) {
+    return "application/x-gzip";
+  } else if (filename.endsWith(".txt")) {
+    return "text/plain";
+  } else if (filename.endsWith(".json")) {
+    return "application/json";
+  }
+  return "text/plain";
+}
+
+
+extern bool r990x_saveparams(); // its in main.cpp
+
+void save900xparams() { 
+
+    String message = FPSTR(kHEADER);
+    if (r990x_saveparams() ) { 
+        message += "900x radio params saved to modem OK. ";
+    } else { 
+        message += "900x radio params save FAILED. Does file /r990x_params.txt exist? ";
+    }
+    message =+ "<a href=/>Click here to continue.</a></body></html>";
+    webServer.send(200, FPSTR(kTEXTHTML), message);
+} 
+
+// by storing all the big files ( especially javascript ) in SPIFFS as .gz, we can save a bunch of space easily.
+// but this can present either form to the user
+bool handleFileRead(String path) {
+  DBG_OUTPUT_PORT.println("handleFileRead: " + path);
+  if (path.endsWith("/")) {
+    path += "index.htm";
+  }
+  String contentType = getContentType(path);
+  String pathWithGz = path + ".gz";
+  if (SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
+    if (SPIFFS.exists(pathWithGz)) {
+      path += ".gz";
+    }
+    File file = SPIFFS.open(path, "r");
+    webServer.streamFile(file, contentType);
+    file.close();
+    return true;
+  }
+  return false;
+}
+
+void handleFileUpload() {
+    //DBG_OUTPUT_PORT.println("handleFileUpload 0: "); 
+  if (webServer.uri() != "/edit") {
+    return;
+  }
+
+  HTTPUpload& upload = webServer.upload();
+  DBG_OUTPUT_PORT.print("status:"); DBG_OUTPUT_PORT.println(upload.status);
+  if (upload.status == UPLOAD_FILE_START) {
+    String filename = upload.filename;
+    if (!filename.startsWith("/")) {
+      filename = "/" + filename;
+    }
+    DBG_OUTPUT_PORT.print("handleFileUpload Name: "); DBG_OUTPUT_PORT.println(filename);
+    fsUploadFile = SPIFFS.open(filename, "w");
+    filename = String();
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    DBG_OUTPUT_PORT.print("handleFileUpload Data: "); DBG_OUTPUT_PORT.println(upload.currentSize);
+    if (fsUploadFile) {
+      fsUploadFile.write(upload.buf, upload.currentSize);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (fsUploadFile) {
+      fsUploadFile.close();
+      DBG_OUTPUT_PORT.print("handleFileUpload Size: "); DBG_OUTPUT_PORT.println(upload.totalSize);
+      webServer.sendHeader("Location","/success.htm");      // Redirect the client to the success page
+      webServer.send(303);
+    } else { 
+      webServer.send(500, "text/plain", "500: couldn't create file");
+    }
+    //DBG_OUTPUT_PORT.print("handleFileUpload Size: "); DBG_OUTPUT_PORT.println(upload.totalSize);
+  }
+  //webServer.send(200, "text/plain", "");
+}
+
+void handle900xParamList() { 
+
+    //webServer.send(200, "text/html", "couldn't do it.");
+    //return;
+
+    File html = SPIFFS.open("/r900x_params.htm", "r");
+    File txt = SPIFFS.open("/r990x_params.txt", "r");
+
+    html.setTimeout(50); // don't wait long as it's a file object, not a serial port.
+    txt.setTimeout(50); // don't wait long as it's a file object, not a serial port.
+
+    if ( ! html ) {  // did we open this file ok, ie does it exist? 
+        swSer.println("no /r900x_params.htm exists, can't display modem settings properly.\n");
+        webServer.send(200, "text/html", "ERR,couldn't do it - /r900x_params.htm is missing from spiffs."); return;
+    }
+    if ( ! txt ) {  // did we open this file ok, ie does it exist? 
+        swSer.println("no /r990x_params.txt exists, can't display modem settings properly.\n");
+        webServer.send(200, "text/html", "ERR,couldn't do it - /r990x_params.txt is missing from spiffs (try reflashing your 900x from this webpage)"); return;
+    }
+
+    // read entie input text file
+    String output1 = ""; // open quote
+    String output2 = "";
+
+    int done = 0; // the done variable is just incase, it stops us from looping forever.
+    while ( txt.available()  && done < 30) {
+        String line = txt.readStringUntil('\n');
+        swSer.print("showing line:(");  swSer.print(done);  swSer.print(")");  swSer.println(line); 
+
+
+        if (line.substring(0,3) == "ATI" ) { continue; } // skip nominally first line.
+        int colon_offset = line.indexOf(":"); // it should have a colon, and an = sign
+        int equals_offset = line.indexOf("="); // it should have a colon, and an = sign
+        int eol_offset = line.indexOf("\r"); // line ends with \r\n. this finds the first of these
+        //  if any of these is -1, it failed, just skip that line
+        if (( colon_offset == -1 ) || ( equals_offset == -1 ) || ( eol_offset == -1 ) ) {    
+            swSer.println("goto doneloop.");
+            goto doneloop;
+        } 
+        String ParamID = line.substring(0,colon_offset);
+        String ParamNAME = line.substring(colon_offset+1,equals_offset);
+        String ParamVAL = line.substring(equals_offset+1,eol_offset); 
+
+        output1 += "pl=pl+'" +ParamID+ ":" +ParamNAME+ "='+gv('"+ParamID+"')+'\\r\\n';\n"; // the \r\n is important or the parser in main.cpp and elsewhere ignores them. must have :, =, and \r 
+
+  //      output1 += ParamID+':'+ParamNAME+'='+ "document.getElementById('"+ParamID+"').value"+
+
+        output2 += "<tr><td>"+ParamID+":"+ParamNAME+"=<td><input type='text' id='"+ParamID+"' value='"+ParamVAL+"'></tr>\n";
+        done++; 
+    }
+    doneloop:
+
+    txt.close();
+
+    //webServer.send(200, "text/html", output2);
+    //return;
+
+
+
+    // we break the output into a bunch of smaller strings, so as not to use up all the ram.
+    String output3 = "";
+    String output4 = "";
+    String output5 = "";
+    int state = 3;
+    done=0;
+    while ( html.available()  and done < 100) {  //read a max of 100 lines from the file, typically much less than that
+        String line = html.readStringUntil('\n');
+
+        swSer.print("showing html:(");  swSer.print(done);  swSer.print(")("); swSer.print(state);  swSer.print(")");  swSer.println(line); 
+        String possible = line.substring(0,6); // first 6 chars on any given line must match either //TAG1 or <!--TA
+        //bool skip = false;
+
+        if ( state == 3 ) { output3 += line; output3 += "\n"; } 
+        if ( state == 4 ) { output4 += line; output4 += "\n"; } 
+        if ( state == 5 ) { output5 += line; output4 += "\n"; } 
+    
+        if ( possible.equals("//TAG1")  ) { 
+            state = 4;
+        } 
+        if ( possible.equals("<!--TA")  ) { 
+            state = 5;
+        } 
+        done++;
+    }
+    html.close();
+
+    String message = FPSTR(kHEADER);
+    message += "<h1>900x Setup</h1>\n";
+
+webServer.setContentLength(message.length()+output1.length()+output2.length()+output3.length()+output4.length()+output5.length());   
+webServer.send(200,"text/html",message);     //  <---Initial send includes the header
+webServer.sendContent(output3);  
+webServer.sendContent(output1);  
+webServer.sendContent(output4);  
+webServer.sendContent(output2);  
+webServer.sendContent(output5);  
+
+
+  //  webServer.send(200, "text/html", mainoutput);
+  //  swSer.print("final-html:");  swSer.println(mainoutput); 
+    return;
+}
+
+// spiffs files  goto url:  http://192.168.4.1/list?dir=/
+void handleFileList() {
+  if (!webServer.hasArg("dir")) {
+    webServer.send(500, "text/plain", "BAD ARGS");
+    return;
+  }
+
+  String path = webServer.arg("dir");
+  DBG_OUTPUT_PORT.println("handleFileList: " + path);
+  Dir dir = SPIFFS.openDir(path);
+  path = String();
+
+  String output = "[";
+  while (dir.next()) {
+    File entry = dir.openFile("r");
+    if (output != "[") {
+      output += ',';
+    }
+    bool isDir = false;
+    output += "{\"type\":\"";
+    output += (isDir) ? "dir" : "file";
+    output += "\",\"name\":\"";
+    output += String(entry.name()).substring(1);
+    output += "\"}";
+    entry.close();
+  }
+
+  output += "]";
+  webServer.send(200, "text/json", output);
+}
+
+void handleFileDelete() {
+  if (webServer.args() == 0) {
+    return webServer.send(500, "text/plain", "BAD ARGS");
+  }
+  String path = webServer.arg(0);
+  DBG_OUTPUT_PORT.println("handleFileDelete: " + path);
+  if (path == "/") {
+    return webServer.send(500, "text/plain", "BAD PATH");
+  }
+  if (!SPIFFS.exists(path)) {
+    return webServer.send(404, "text/plain", "FileNotFound");
+  }
+  SPIFFS.remove(path);
+  webServer.send(200, "text/plain", "");
+  path = String();
+}
+
+void handleFileCreate() {
+  if (webServer.args() == 0) {
+    return webServer.send(500, "text/plain", "BAD ARGS");
+  }
+  String path = webServer.arg(0);
+  DBG_OUTPUT_PORT.println("handleFileCreate: " + path);
+  if (path == "/") {
+    return webServer.send(500, "text/plain", "BAD PATH");
+  }
+  if (SPIFFS.exists(path)) {
+    return webServer.send(500, "text/plain", "FILE EXISTS");
+  }
+  File file = SPIFFS.open(path, "w");
+  if (file) {
+    file.close();
+  } else {
+    return webServer.send(500, "text/plain", "CREATE FAILED");
+  }
+  webServer.send(200, "text/plain", "");
+  path = String();
+}
+
+void handle900xParamSave() { 
+  if (webServer.args() == 0) {
+    return webServer.send(500, "text/plain", "BAD ARGS");
+  }
+  //String p = webServer.arg('params');
+   // DBG_OUTPUT_PORT.println("handle900xParamSave: " + p);
+
+
+  String message = "";
+  for (uint8_t i = 0; i < webServer.args(); i++) {
+    message += " " + webServer.argName(i) + " -> " + webServer.arg(i) + "\n";
+  }
+
+  int retval = 404; // if its good, then some sort of 200 message, depending on what happens.
+
+  if(webServer.hasArg(kPLAIN)) { // ie PUT/POST content was given....
+        // write params to spiffs,  TODO need better checks here, as it comes from the client, but the worse they can do is pretty minor
+       File f = SPIFFS.open("/r990x_params.txt", "w");
+       f.print(webServer.arg(kPLAIN));
+       f.close();
+       message += "\nFile /r990x_params.txt written.\n";
+       
+
+        if (r990x_saveparams() ) { 
+            message += "and 900x radio params activated to modem OK. ";
+            retval = 201;
+        } else { 
+            message += "and 900x radio params activate FAILED. Does file /r990x_params.txt exist? ";
+            retval = 202;
+        }
+    
+  }
+
+  webServer.send(retval, "text/plain", message);
+
+  DBG_OUTPUT_PORT.println("handle900xParamSave: " + message);
+
+
+
+
+// optionally run  save900xparams() or r990x_saveparams() 
+
 }
 
 //---------------------------------------------------------------------------------
@@ -577,6 +1028,8 @@ MavESP8266Httpd::MavESP8266Httpd()
 
 //---------------------------------------------------------------------------------
 //-- Initialize
+
+
 void
 MavESP8266Httpd::begin(MavESP8266Update* updateCB_)
 {
@@ -585,15 +1038,76 @@ MavESP8266Httpd::begin(MavESP8266Update* updateCB_)
     webServer.on("/getparameters",  handle_getParameters);
     webServer.on("/setparameters",  handle_setParameters);
     webServer.on("/getstatus",      handle_getStatus);
+    webServer.on("/getstatus_tcp",  handle_getStatusTcp);
     webServer.on("/reboot",         handle_reboot);
     webServer.on("/setup",          handle_setup);
     webServer.on("/info.json",      handle_getJSysInfo);
     webServer.on("/status.json",    handle_getJSysStatus);
     webServer.on("/log.json",       handle_getJLog);
-    webServer.on("/update",         handle_update);
-    webServer.on("/upload",         HTTP_POST, handle_upload, handle_upload_status);
-    webServer.onNotFound(           handle_notFound);
+
+    webServer.on("/updatepage",       handle_update_html); // presents a webpage that then might upload a binary to the /upload endpoint via POST
+
+    webServer.on("/save900xparams",         save900xparams);
+
+    
+    webServer.on("/upload",         HTTP_POST, handle_upload, handle_upload_status); // this save/s an uploaded file
+
+
+    //list directory, return details as json.
+    webServer.on("/list", HTTP_GET, handleFileList);
+
+    //load editor
+    webServer.on("/edit", HTTP_GET, []() {
+    if (!handleFileRead("/edit.htm")) {
+      webServer.send(404, "text/plain", "FileNotFound");
+    }
+    });
+
+    //create file
+    webServer.on("/edit", HTTP_PUT, handleFileCreate);
+
+    //delete file
+    webServer.on("/edit", HTTP_DELETE, handleFileDelete);
+
+
+   //TIP:  /edit endpoint uses ace.js and friends from https://github.com/ajaxorg/ace-builds/tree/master/src
+
+    //first callback is called after the request has ended with all parsed arguments
+    //second callback handles file uploads at that location
+    //webServer.on("/edit", HTTP_POST, handleFileUpload);
+
+    //webServer.send(200, "text/plain", "");
+    //}, handleFileUpload);
+
+//    webServer.on("/edit", HTTP_POST, [](){ webServer.send(200, "text/plain", "yup."); }, handleFileUpload);
+
+    webServer.on("/edit", HTTP_POST, [](){ webServer.sendHeader("Location","/success.htm"); webServer.send(303); }, handleFileUpload);
+
+    //      // Redirect the client to the success page
+    //webServer.send(303);
+
+    webServer.on("/plist", HTTP_GET, handle900xParamList);
+
+    webServer.on("/psave", HTTP_PUT, handle900xParamSave);
+
+    //called when the url is not defined here
+    //use it to load content from SPIFFS
+    webServer.onNotFound([]() {
+    if (!handleFileRead(webServer.uri())) {
+      webServer.send(404, "text/plain", "FileNotFound");
+    }
+    });
+
+    //const char* webupdatehost = "esp8266-webupdate";
+
+    //MDNS.begin(webupdatehost);
+
+    httpUpdater.setup(&webServer);
+
     webServer.begin();
+
+    //MDNS.addService("http", "tcp", 80);
+    //DBG_OUTPUT_PORT.printf("HTTPUpdateServer ready! Open http://%s.local/update in your browser\n", webupdatehost);
 }
 
 //---------------------------------------------------------------------------------
