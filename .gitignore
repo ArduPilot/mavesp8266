@@ -1,5 +1,8 @@
 .pioenvs
+.vagrant
 platformio.sublime*
 platformio.pro*
 tests
 research
+.pio
+ubuntu-bionic-18.04-cloudimg-console.log

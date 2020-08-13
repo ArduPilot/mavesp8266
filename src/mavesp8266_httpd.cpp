@@ -83,6 +83,7 @@ const char* kFlashMaps[7] = {
 #define GIT_VERSION_STRING xstr(PIO_SRC_REV)
 #define BUILD_DATE_STRING xstr(PIO_BUILD_DATE)
 #define BUILD_TIME_STRING xstr(PIO_BUILD_TIME)
+#define BOARD_STRING xstr(PIO_BOARD)
 
 static uint32_t flash = 0;
 static char paramCRC[12] = {""};
@@ -223,6 +224,9 @@ static void handle_root()
     message += BUILD_DATE_STRING;
     message += " ";
     message += BUILD_TIME_STRING;
+    message += "<br>\n";
+    message += "Board: ";
+    message += BOARD_STRING;
     message += "<p>\n";
     message += "<ul>\n";
     message += "<li><a href='/getstatus'>Get Status</a>\n";
@@ -288,6 +292,10 @@ static void handle_setup()
     message += "<input type='text' name='pwdsta' value='";
     message += getWorld()->getParameters()->getWifiStaPassword();
     message += "'><br>";
+
+    message += "WiFi MAC: ";
+    message += WiFi.macAddress();
+    message += "<br>\n";
 
     IPAddress IP;    
     message += "Station IP:&nbsp;";
