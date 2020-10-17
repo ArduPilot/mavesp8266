@@ -123,7 +123,7 @@ MavESP8266Parameters::begin()
 void
 MavESP8266Parameters::setLocalIPAddress(IPAddress ipAddress)
 {
-    _wifi_ip_address = ipAddress;
+    _wifi_ip_address = (uint32_t)ipAddress;
     _wifi_ip_addr_string = ipAddress.toString();
 }
 
