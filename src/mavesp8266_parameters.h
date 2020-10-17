@@ -126,7 +126,9 @@ public:
     void        setWifiStaGateway           (uint32_t addr);
     void        setWifiStaSubnet            (uint32_t addr);
     void        setUartBaudRate             (uint32_t baud);
-    void        setLocalIPAddress           (uint32_t ipAddress);
+    void        setLocalIPAddress           (IPAddress ipAddress);
+
+    String      getLocalIPAddressInString   ();
 
     stMavEspParameters* getAt               (int index);
 

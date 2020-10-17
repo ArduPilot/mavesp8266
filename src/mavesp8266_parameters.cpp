@@ -65,6 +65,8 @@ uint32_t    _wifi_subnetsta;
 uint32_t    _uart_baud_rate;
 uint32_t    _flash_left;
 
+String      _wifi_ip_addr_string;
+
 //-- Parameters
 //   No string support in parameters so we stash a char[16] into 4 uint32_t
  struct stMavEspParameters mavParameters[] = {
@@ -119,9 +121,18 @@ MavESP8266Parameters::begin()
 //---------------------------------------------------------------------------------
 //-- Initialize
 void
-MavESP8266Parameters::setLocalIPAddress(uint32_t ipAddress)
+MavESP8266Parameters::setLocalIPAddress(IPAddress ipAddress)
 {
     _wifi_ip_address = ipAddress;
+    _wifi_ip_addr_string = ipAddress.toString();
+}
+
+//---------------------------------------------------------------------------------
+//-- Initialize
+String
+MavESP8266Parameters::getLocalIPAddressInString()
+{
+    return(_wifi_ip_addr_string);
 }
 
 //---------------------------------------------------------------------------------

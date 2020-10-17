@@ -188,19 +188,102 @@ void handle_getParameters()
     String message = FPSTR(kHEADER);
     message += "<p>Parameters</p><table><tr><td width=\"240\">Name</td><td>Value</td></tr>";
     for(int i = 0; i < MavESP8266Parameters::ID_COUNT; i++) {
-        message += "<tr><td>";
-        message += getWorld()->getParameters()->getAt(i)->id;
-        message += "</td>";
-        unsigned long val = 0;
-        if(getWorld()->getParameters()->getAt(i)->type == MAV_PARAM_TYPE_UINT32)
-            val = (unsigned long)*((uint32_t*)getWorld()->getParameters()->getAt(i)->value);
-        else if(getWorld()->getParameters()->getAt(i)->type == MAV_PARAM_TYPE_UINT16)
-            val = (unsigned long)*((uint16_t*)getWorld()->getParameters()->getAt(i)->value);
-        else
-            val = (unsigned long)*((int8_t*)getWorld()->getParameters()->getAt(i)->value);
-        message += "<td>";
-        message += val;
-        message += "</td></tr>";
+		
+		if(i == ID_FWVER)
+		{
+			message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            message += MAVESP8266_VERSION_MAJOR;
+            message += ".";
+            message += MAVESP8266_VERSION_MINOR;
+            message += ".";
+            message += MAVESP8266_VERSION_BUILD;
+            message += "</td></tr>";
+		}
+        else if(i == ID_MODE)
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            if(getWorld()->getParameters()->getWifiMode() == WIFI_MODE_AP)
+            {
+                message += "AP";
+            }
+            else
+            {
+                message += "STA";
+            }
+            message += "</td></tr>";
+        }
+        else if(i == ID_IPADDRESS)
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            message += getWorld()->getParameters()->getLocalIPAddressInString();
+            message += "</td></tr>";
+        }
+        else if(i == ID_SSID1)
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            message += getWorld()->getParameters()->(const char*)getWifiSsid();
+            message += "</td></tr>";
+        }
+        else if(i > ID_SSID1 && i <= ID_SSID4) {}
+        else if(i == ID_PASS1)
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            message += getWorld()->getParameters()->(const char*)getWifiPassword();
+            message += "</td></tr>";
+        }
+        else if(i > ID_PASS1 && i <= ID_PASS4) {}
+        else if(i == ID_SSIDSTA1)
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            message += getWorld()->getParameters()->(const char*)getWifiStaSsid();
+            message += "</td></tr>";
+        }
+        else if(i > ID_SSIDSTA1 && i <= ID_SSIDSTA4) {}
+        else if(i == ID_PASSSTA1)
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            message += "<td>";
+            message += getWorld()->getParameters()->(const char*)getWifiStaPassword();
+            message += "</td></tr>";
+        }
+        else if(i > ID_PASSSTA1 && i <= ID_PASSSTA4) {}
+        else // integer values
+        {
+            message += "<tr><td>";
+            message += Param_getAt(i)->id;
+            message += "</td>";
+            unsigned long val = 0;
+            if (Param_getAt(i)->type == PARAM_TYPE_UINT32)
+                val = (unsigned long)*((UINT32 *)Param_getAt(i)->value);
+            else if (Param_getAt(i)->type == PARAM_TYPE_UINT16)
+                val = (unsigned long)*((UINT16 *)Param_getAt(i)->value);
+            else
+                val = (unsigned long)*((UINT8 *)Param_getAt(i)->value);
+
+            message += "<td>";
+            message += val;
+            message += "</td></tr>";
+        }
     }
     message += "</table>";
     message += "</body>";

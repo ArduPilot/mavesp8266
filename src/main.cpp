@@ -197,6 +197,8 @@ void setup() {
     DEBUG_LOG("Local IP: %s\n", localIP.toString().c_str());
 
     Parameters.setLocalIPAddress(localIP);
+    Parameters.setLocalIPAddressInString(localIP.toString());
+    
     IPAddress gcs_ip(localIP);
     //-- I'm getting bogus IP from the DHCP server. Broadcasting for now.
     gcs_ip[3] = 255;
